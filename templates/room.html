@@ -1,52 +1,62 @@
-{% extends 'base.html' %} {% block content %}
+{% extends 'base.html' %}
+
+{% block content %}
 <div class="message-box">
-  <h2>Chat Room: {{code}}</h2>
-  <div class="messages" id="messages"></div>
+  <h2>Chat Room - Welcome {{ session["name"] }}</h2>
+  <div id="messages" class="messages"></div>
   <div class="inputs">
-    <input
-      type="text"
-      rows="3"
-      placeholder="Message"
-      name="message"
-      id="message"
-    />
-    <button type="button" name="send" id="send-btn" onClick="sendMessage()">
-      Send
-    </button>
+    <select id="recipientSelect">
+      <option value="public">Public</option>
+      {% for user in users %}
+      <option value="{{ user }}">{{ user }}</option>
+      {% endfor %}
+    </select>
+    <input type="text" id="messageInput" placeholder="Type your message..." />
+    <button id="sendMessageBtn">Send</button>
   </div>
 </div>
+
+<script src="//cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.0/socket.io.js"></script>
 <script type="text/javascript">
-  var socketio = io();
+  var socket = io();
+  var messageInput = document.getElementById("messageInput");
+  var sendMessageBtn = document.getElementById("sendMessageBtn");
+  var messagesDiv = document.getElementById("messages");
+  var recipientSelect = document.getElementById("recipientSelect");
 
-  const messages = document.getElementById("messages");
+  // Send message on button click
+  sendMessageBtn.addEventListener("click", function () {
+    var message = messageInput.value;
+    var recipient = recipientSelect.value;
 
-  const createMessage = (name, msg) => {
-    const content = `
-    <div class="text">
-        <span>
-            <strong>${name}</strong>: ${msg}
-        </span>
-        <span class="muted">
-            ${new Date().toLocaleString()}
-        </span>
-    </div>
-    `;
-    messages.innerHTML += content;
-  };
-
-  socketio.on("message", (data) => {
-    createMessage(data.name, data.message);
+    if (message) {
+      var messageType = recipient === "public" ? "public" : "private";
+      socket.emit("message", { type: messageType, data: message, recipient: recipient });
+      messageInput.value = '';  // Clear the input field
+    }
   });
 
-  const sendMessage = () => {
-    const message = document.getElementById("message");
-    if (message.value == "") return;
-    socketio.emit("message", { data: message.value });
-    message.value = "";
-  };
+  // Listen for new messages
+  socket.on("message", function (data) {
+    var newMessage = document.createElement("div");
+    newMessage.textContent = data.name + ": " + data.message;
+    messagesDiv.appendChild(newMessage);
+    messagesDiv.scrollTop = messagesDiv.scrollHeight;  // Scroll to bottom
+  });
+
+  // Update user list
+  socket.on("update_users", function(users) {
+    var recipientSelect = document.getElementById("recipientSelect");
+    recipientSelect.innerHTML = '<option value="public">Public</option>';  // Reset to include the public option
+
+    users.forEach(function(user) {
+      if (user !== "{{ session['name'] }}") {  // Don't add the current user to the list
+        var option = document.createElement("option");
+        option.value = user;
+        option.textContent = user;
+        recipientSelect.appendChild(option);
+      }
+    });
+  });
 </script>
-{% for msg in messages %}
-<script type="text/javascript">
-  createMessage("{{msg.name}}", "{{msg.message}}");
-</script>
-{% endfor %} {% endblock %}
+{% endblock %}

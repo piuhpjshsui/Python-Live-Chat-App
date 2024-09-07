@@ -1,103 +1,89 @@
 from flask import Flask, render_template, request, session, redirect, url_for
-from flask_socketio import join_room, leave_room, send, SocketIO
-import random
-from string import ascii_uppercase
+from flask_socketio import join_room, leave_room, send, SocketIO, emit
 
 app = Flask(__name__)
 app.config["SECRET_KEY"] = "hjhjsdahhds"
 socketio = SocketIO(app)
 
-rooms = {}
-
-def generate_unique_code(length):
-    while True:
-        code = ""
-        for _ in range(length):
-            code += random.choice(ascii_uppercase)
-        
-        if code not in rooms:
-            break
-    
-    return code
+ROOM = "public_room"
+users = {}  # To store connected users
+registered_users = {}  # To store registered usernames
 
 @app.route("/", methods=["POST", "GET"])
 def home():
     session.clear()
     if request.method == "POST":
         name = request.form.get("name")
-        code = request.form.get("code")
-        join = request.form.get("join", False)
-        create = request.form.get("create", False)
 
         if not name:
-            return render_template("home.html", error="Please enter a name.", code=code, name=name)
-
-        if join != False and not code:
-            return render_template("home.html", error="Please enter a room code.", code=code, name=name)
+            return render_template("home.html", error="Please enter a name.", name=name)
         
-        room = code
-        if create != False:
-            room = generate_unique_code(4)
-            rooms[room] = {"members": 0, "messages": []}
-        elif code not in rooms:
-            return render_template("home.html", error="Room does not exist.", code=code, name=name)
-        
-        session["room"] = room
-        session["name"] = name
-        return redirect(url_for("room"))
+        if name in registered_users:
+            # Existing user, log them in
+            session["name"] = name
+            return redirect(url_for("room"))
+        else:
+            # Register new user
+            registered_users[name] = True
+            session["name"] = name
+            return redirect(url_for("room"))
 
     return render_template("home.html")
 
 @app.route("/room")
 def room():
-    room = session.get("room")
-    if room is None or session.get("name") is None or room not in rooms:
+    if session.get("name") is None:
         return redirect(url_for("home"))
 
-    return render_template("room.html", code=room, messages=rooms[room]["messages"])
+    return render_template("room.html", messages=[], users=users.keys())
 
 @socketio.on("message")
-def message(data):
-    room = session.get("room")
-    if room not in rooms:
-        return 
+def handle_message(data):
+    name = session.get("name")
+    message_type = data.get("type")
+    message_content = data.get("data")
+    recipient = data.get("recipient")
+
+    if message_type == "public":
+        # Public message to all users in the room
+        content = {"name": name, "message": message_content}
+        send(content, to=ROOM)
     
-    content = {
-        "name": session.get("name"),
-        "message": data["data"]
-    }
-    send(content, to=room)
-    rooms[room]["messages"].append(content)
-    print(f"{session.get('name')} said: {data['data']}")
+    elif message_type == "private":
+        # Private message to a specific user
+        if recipient in users:
+            # Notify the recipient
+            recipient_sid = users[recipient]
+            emit("message", {"name": f"Private from {name}", "message": message_content}, to=recipient_sid)
+            
+            # Notify the sender
+            sender_sid = users[name]
+            emit("message", {"name": f"Private to {recipient}", "message": message_content}, to=sender_sid)
+        else:
+            # If recipient is not found, send an error to the sender
+            emit("message", {"name": "System", "message": f"{recipient} is not available."}, to=users[name])
 
 @socketio.on("connect")
-def connect(auth):
-    room = session.get("room")
+def connect():
     name = session.get("name")
-    if not room or not name:
-        return
-    if room not in rooms:
-        leave_room(room)
-        return
+    if not name:
+        return redirect(url_for("home"))
     
-    join_room(room)
-    send({"name": name, "message": "has entered the room"}, to=room)
-    rooms[room]["members"] += 1
-    print(f"{name} joined room {room}")
+    users[name] = request.sid  # Map username to socket ID
+    join_room(ROOM)
+    send({"name": name, "message": "has entered the room"}, to=ROOM)
+    # Emit the updated user list to all clients
+    emit("update_users", list(users.keys()), to=ROOM)
 
 @socketio.on("disconnect")
 def disconnect():
-    room = session.get("room")
     name = session.get("name")
-    leave_room(room)
-
-    if room in rooms:
-        rooms[room]["members"] -= 1
-        if rooms[room]["members"] <= 0:
-            del rooms[room]
-    
-    send({"name": name, "message": "has left the room"}, to=room)
-    print(f"{name} has left the room {room}")
+    if name in users:
+        del users[name]
+    leave_room(ROOM)
+    send({"name": name, "message": "has left the room"}, to=ROOM)
+    # Emit the updated user list to all clients
+    emit("update_users", list(users.keys()), to=ROOM)
 
 if __name__ == "__main__":
     socketio.run(app, debug=True)
