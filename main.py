@@ -6,6 +6,7 @@ app.config["SECRET_KEY"] = "hjhjsdahhds"
 socketio = SocketIO(app)
 
 ROOM = "public_room"
+
 users = {}  # To store connected users
 registered_users = {}  # To store registered usernames
 
